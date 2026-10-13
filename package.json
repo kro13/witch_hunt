@@ -1,0 +1,22 @@
+{
+  "name": "witch_hunt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "jev": "node dist/ai/jev-server.js",
+    "start": "tsc && node dist/ai/jev-server.js & vite --open",
+    "dev": "tsc && node dist/ai/jev-server.js & vite --open",
+    "stop": "kill $(lsof -t -iTCP:5173 -sTCP:LISTEN) $(lsof -t -iTCP:8787 -sTCP:LISTEN) 2>/dev/null || true"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^6.0.3",
+    "vite": "^7.1.9"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  }
+}
