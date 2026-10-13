@@ -1,4 +1,4 @@
-import type { DirKey } from './types';
+import type { DirKey } from './types.js';
 
 export const copy = {
   documentTitle: 'Witch Hunt',

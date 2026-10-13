@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "node src/scripts/set-jev-url.mjs remote && tsc",
+    "build:local": "node src/scripts/set-jev-url.mjs local && tsc && node src/scripts/set-jev-url.mjs remote",
     "watch": "tsc --watch",
     "jev": "node dist/ai/jev-server.js",
-    "start": "tsc && node dist/ai/jev-server.js & vite --open",
-    "dev": "tsc && node dist/ai/jev-server.js & vite --open",
+    "serve": "vite --open",
+    "start": "npm run build:local && node dist/ai/jev-server.js & vite --open",
+    "start:remote": "npm run build && vite --open",
+    "dev": "npm run start",
+    "dev:remote": "npm run start:remote",
     "stop": "kill $(lsof -t -iTCP:5173 -sTCP:LISTEN) $(lsof -t -iTCP:8787 -sTCP:LISTEN) 2>/dev/null || true"
   },
   "devDependencies": {

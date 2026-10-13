@@ -1,5 +1,5 @@
-import { chebyshev, hunterCanReach, inBounds, manhattan, samePos } from '../geo';
-import type { Pos } from '../types';
+import { chebyshev, hunterCanReach, inBounds, manhattan, samePos } from '../geo.js';
+import type { Pos } from '../types.js';
 
 function mobility(from: Pos, hunter: Pos, size: number, maxStep: number): number {
   let count = 0;

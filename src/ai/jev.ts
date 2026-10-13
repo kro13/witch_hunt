@@ -1,6 +1,7 @@
-import { directionOf } from '../geo';
-import type { Pos } from '../types';
-import { chooseWitchMove as chooseHeuristicWitchMove } from './ai';
+import { directionOf } from '../geo.js';
+import type { Pos } from '../types.js';
+import { chooseWitchMove as chooseHeuristicWitchMove } from './ai.js';
+import { JEV_URL } from './jev-config.js';
 
 export interface WitchTurnInput {
   boardSize: number;
@@ -23,7 +24,7 @@ function jevUrl(): string {
       return fromWindow;
     }
   }
-  return '/jev';
+  return JEV_URL;
 }
 
 function fallbackMove(input: WitchTurnInput): Pos {

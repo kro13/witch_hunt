@@ -1,5 +1,5 @@
-import { chooseWitchMove } from './ai/jev';
-import { copy } from './copy';
+import { chooseWitchMove } from './ai/jev.js';
+import { copy } from './copy.js';
 import {
   cellsAtManhattan,
   centerPos,
