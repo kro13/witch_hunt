@@ -35,7 +35,7 @@ Do not load `src/*.ts` in the browser. Ordinary servers send `.ts` as `video/mp2
 
 ### Premise
 
-Fog over a parish green. The hunter carries a lantern and can only step along the cardinals. The witch slips one cell at a time, including diagonally, and is invisible. The hunter infers her path from the direction of each of her moves, and every fifth watch she is forced still and her road-distance is revealed.
+Fog over a parish green. The hunter carries a lantern and can only step along the cardinals. The witch slips one cell at a time, including diagonally, or holds still, and is invisible. The hunter infers her path from the direction of each of her moves.
 
 ### Roles
 
@@ -53,27 +53,23 @@ Fog over a parish green. The hunter carries a lantern and can only step along th
 
 ### Movement
 
-**Hunter** — must move. Exactly **1 or 2 cells**, orthogonally only (N/S/E/W). No diagonals, no staying. Off-board steps are illegal. **Slow hunt** (Instruments) limits this to 1 cell; the witch AI accounts for that.
+**Hunter** — each watch, either **move** (exactly **1 or 2 cells**, orthogonally only) **or spend one action**. No diagonals, no staying in place as a move. Off-board steps are illegal. The witch AI accounts for that reach.
 
-**Witch** — on a normal watch, exactly **1 cell** in any of the 8 directions (Chebyshev distance 1). She cannot stay except on a bound watch.
+**Witch** — **1 cell** in any of the 8 directions (Chebyshev distance 1), or **hold still**. Staying is optional every watch.
 
-**Bound watch** — every **5th** watch (`turn % 5 === 0`: 5, 10, 15, …) she **must hold still**.
-
-Settings: field size and watch limit apply on **New hunt**. The stay interval is fixed at 5.
+Settings: field size and watch limit apply on **New hunt**.
 
 ### Information
 
 After each witch action the hunter always learns the **bearing** of that action (`N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW`, or held still). The journal stores the full history.
 
-The hunter learns **Manhattan distance** (`|Δx| + |Δy|`) from their cell to the witch:
+The hunter learns **Manhattan distance** (`|Δx| + |Δy|`) only by spending **Rumours** (once per hunt). Holding still does not reveal it. Until then road-distance is unknown. While a pulse is fresh, every in-bounds cell at that distance is marked on the board (the Manhattan diamond). The marks clear as soon as the hunter takes their next step.
 
-- at the start of the hunt, before the first step (journal: `W0 Held still · road-distance N`)
-- again on every bound watch (5, 10, 15, …), logged the same way
+**Patrol** (once per hunt) marks a full row or column with dark-red crosses. If the witch is already on that line when it is laid, or occupies a marked cell after she acts, the crosses turn bright red and the journal logs `Patrol struck`. They clear when the hunter takes their next move or action.
 
-That number is kept as “last road-distance” until the next pulse. While a pulse is fresh, every in-bounds cell at that distance is marked on the board (the Manhattan diamond). The marks clear as soon as the hunter takes their next step, unless a tracking aid is on:
+**Hounds** (once per hunt) lets the hunter place three dog-head markers on chosen cells. After each witch step they move the same direction; a hound that leaves the board disappears. If she holds still, they stay.
 
-- **Witch scent** (default on): the last-reveal diamond stays put and fades each watch. Hover shows watches since that reveal. A new pulse restores full color, new positions, and a zero counter.
-- **Track the witch** (default off): the diamond is shifted by each reported bearing. Cells the hunter steps on (without a catch) are dropped. After every distance reveal the set is replaced by the new Manhattan diamond.
+**Trap** (once per hunt) marks one cell with a bear trap. If she occupies that cell after she acts, she is caught. If the trap is set on her current cell, it breaks and vanishes instead of catching her.
 
 The witch always knows the hunter’s cell.
 
@@ -81,19 +77,23 @@ The witch always knows the hunter’s cell.
 
 A **watch** is one hunter step plus the witch’s reply (unless the hunter already caught her).
 
-1. Hunter steps.
-2. Same cell → hunter wins immediately; the witch does not act.
+1. Hunter steps **or** spends an action (Rumours, Patrol, Hounds, or Trap).
+2. If they moved onto the witch → hunter wins immediately; the witch does not act.
 3. Otherwise the witch acts (move or stay).
-4. Same cell → hunter wins (the AI avoids this when it has another option).
+4. Same cell, or a live trap under her after she acts → hunter wins (the AI avoids both when it has another option).
 5. If that watch was the last (`turn >= maxTurns`, default **25**) → witch escapes.
 6. Else `turn` increments and the hunter acts again.
 
-Catch means occupying the same cell. There is no attack roll.
+Catch means occupying the same cell, or the witch occupying a live trap after she acts. There is no attack roll.
 
 ### Player controls
 
 - Click a highlighted cell (gold ring, 1 or 2 steps).
-- Arrow keys: 1 step. Shift+arrow: 2 steps (disabled in Slow hunt).
+- Arrow keys: 1 step. Shift+arrow: 2 steps.
+- **Rumours**: once per hunt, reveals Manhattan distance, ends the watch.
+- **Patrol**: once per hunt, click two cells in the same row or column to mark that line, ends the watch. Escape cancels placement.
+- **Hounds**: once per hunt, click three cells to place them; they copy her step and fall off the edge, ends the watch. Escape cancels placement.
+- **Trap**: once per hunt, click a cell to set a bear trap; it catches her if she steps on it, and breaks if set on her cell. Ends the watch. Escape cancels placement.
 - Illegal clicks (diagonal, stay, off-board, not the hunter’s phase) are ignored.
 
 ### Debug
@@ -102,7 +102,7 @@ Catch means occupying the same cell. There is no attack roll.
 
 ### Why the rules have teeth
 
-The hunter is faster on a straight line (2 orthogonal) but cannot cut a diagonal. The witch is slower but can sit off-axis, where the hunter cannot land in one step. Forced stays plus a Manhattan diamond (opening pulse, then every five watches) periodically collapse the hidden-location set. The journal of bearings is the main tracking tool; the pulse is a calibration.
+The hunter is faster on a straight line (2 orthogonal) but cannot cut a diagonal. The witch is slower but can sit off-axis, where the hunter cannot land in one step, and may hold still to avoid stepping onto a cell the hunter can reach next. The journal of bearings is the main tracking tool; Rumours is the distance calibration; Patrol is a tripwire on a rank or file; Hounds copy her last step across the green; Trap is a single cell that ends the hunt if she walks onto it.
 
 ---
 
@@ -140,18 +140,22 @@ index.ts  →  engine.ts  →  ai.ts
 
 | Field | Role |
 | --- | --- |
-| `config` | `boardSize`, `maxTurns`, `witchStayInterval` |
+| `config` | `boardSize`, `maxTurns` |
 | `hunter`, `witch` | Current cells |
 | `turn` | 1-based watch being played |
 | `phase` | `'hunter'` \| `'resolving'` \| `'won'` \| `'lost'` |
-| `history` | One `HistoryEntry` per completed witch action |
-| `lastManhattan` | Last pulse (set at hunt start and on each bound watch) |
+| `history` | Witch actions and hunter actions (Rumours) |
+| `lastManhattan` | Last pulse (set when Rumours is spent) |
 | `manhattanRing` | Cells at the latest pulse distance; emptied on the hunter’s next step |
-| `possibleWitch` | Tracked diamond: shifted by each bearing, dropped where the hunter steps, reset on every pulse |
-| `scentCells` | Last-reveal diamond for Witch scent; not shifted |
-| `scentAge` | Watches since the last pulse; reset to 0 on each reveal |
+| `rumoursAvailable` | Hunter can still spend Rumours |
+| `patrolAvailable` | Hunter can still spend Patrol |
+| `patrolCells` | Marked row or column; empty if none |
+| `patrolHit` | Witch occupied a marked cell; marks flare until the hunter’s next action |
+| `houndsAvailable` | Hunter can still spend Hounds |
+| `hounds` | Dog-head markers; shift with the witch, drop off-board |
+| `trapAvailable` | Hunter can still spend Trap |
+| `trap` | Bear-trap cell, or `null` if unset or broken |
 | `debug` | Reveal flag |
-| `slowHunt` | Hunter max step is 1 |
 | `pendingHunterFrom` | Origin of the in-flight hunter step, used when recording the journal |
 
 Engine functions take state in and return `{ ok, reason?, state }`. The UI keeps a single `state` variable.
@@ -162,7 +166,7 @@ Engine functions take state in and return `{ ok, reason?, state }`. The UI keeps
          createGame()
               │
               ▼
-         ┌─────────┐  legal hunter step   ┌────────────┐
+         ┌─────────┐  move or action      ┌────────────┐
          │ hunter  │ ───────────────────► │ resolving  │
          └─────────┘                      └────────────┘
               ▲                                  │
@@ -176,23 +180,21 @@ Engine functions take state in and return `{ ok, reason?, state }`. The UI keeps
          hunter lands on witch  →  won (skip resolving)
 ```
 
-`applyHunterMove` only moves the hunter. `resolveWitchTurn` runs the AI and writes history. Splitting them lets the UI paint the lantern’s new cell before the bearing updates.
+`applyHunterMove` only moves the hunter. `useRumours`, `usePatrol`, `useHounds`, and `useTrap` spend those actions and also enter `resolving`. `resolveWitchTurn` runs the AI, shifts hounds with the witch’s bearing, springs a live trap if she occupies it, and writes history. Splitting them lets the UI paint the hunter’s action before the bearing updates.
 
 ### Witch AI
 
-`chooseWitchMove(options, hunter, size)` scores each legal cell and picks the maximum (small random jitter for ties).
+`chooseWitchMove(options, hunter, size, maxStep, from)` scores each legal step and picks the maximum (small random jitter for ties). STAY is included in `options`. The Jev payload sets `canStay: true`, `rumoursAvailable`, `patrolAvailable`, `patrolCells`, `houndsAvailable`, `hounds`, `trapAvailable`, and `trap`. If the best step would land on a cell the hunter can reach next turn (or on the hunter, or on the trap), the fallback AI stays instead. Landing on a patrol line is penalized. Landing on the trap is treated as an instant loss.
 
 Scoring, roughly:
 
-- Landing on the hunter: −10000
+- Landing on the hunter or the trap: −10000
 - Cell the hunter can reach next step: −600
 - Manhattan and Chebyshev distance: positive
 - Off-axis relative to the hunter (diagonal offset): bonus — the hunter cannot step there
 - Safe onward mobility: bonus
 - Distance from the map edge: small bonus (corners trap her)
 - `Math.random() * 4`: noise
-
-On a bound watch `options` is only her current cell, so the scorer is unused.
 
 ### UI
 

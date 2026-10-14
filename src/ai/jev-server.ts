@@ -11,17 +11,19 @@ const CORS_ORIGIN = process.env.JEV_CORS_ORIGIN || '*';
 
 const GAME_RULES = {
   objective:
-    'The hunter wins by occupying the same cell as the witch. The witch wins by still being on a different cell after the last watch.',
+    'The hunter wins by occupying the same cell as the witch, or if the witch occupies a live trap after she acts. The witch wins by still being on a different cell after the last watch, off any live trap.',
   hunterMovement:
-    'The hunter must move every turn, 1 or 2 cells orthogonally (north/south/east/west). No diagonals and no staying. Slow hunt limits this to 1 cell. hunterMaxStep is the current limit.',
+    'Each watch the hunter either moves 1 or 2 cells orthogonally (north/south/east/west) or spends one action. No diagonals and no staying in place as a move. hunterMaxStep is 2.',
+  hunterActions:
+    'Rumours (once per hunt) reveals Manhattan distance and marks that diamond until the hunter next steps. Patrol (once per hunt) marks a full row or column; if the witch occupies a marked cell after she acts, those marks flare. Hounds (once per hunt) lets the hunter place three markers on chosen cells; after each witch step they move the same direction and vanish if they leave the board. Trap (once per hunt) lets the hunter mark one cell; if the witch steps on it after she acts she is caught. If the trap is set on her current cell it breaks and vanishes instead of catching her. Any action ends the hunter’s watch immediately. rumoursAvailable, patrolAvailable, houndsAvailable, and trapAvailable are true until spent.',
   witchMovement:
-    'On a normal watch the witch must move exactly 1 cell in one of the 8 directions, including diagonal. She cannot stay unless this is a bound watch.',
-  boundWatch:
-    'Every witchStayInterval-th watch (turn % witchStayInterval === 0, and turn > 0) the witch must hold still. The hunter then learns Manhattan (road) distance to her.',
+    'Each watch the witch may move exactly 1 cell in one of the 8 directions, including diagonal, or hold still (STAY). Staying is optional every watch when canStay is true.',
+  staying:
+    'STAY is safe only if the hunter cannot reach her current cell on their next turn. Prefer STAY only in that case, and only when every useful step would land on the hunter, on the trap, or on a cell the hunter can reach next turn. If the current cell is hunter-reachable and any option is not, do not stay.',
   coordinates:
     'The board is a square grid. Origin (0, 0) is the top-left cell. x increases east. y increases south. Cells are named like chess files: A1 is (0, 0).',
   information:
-    'After the witch acts, the hunter always learns the bearing of that action. The hunter does not see the witch unless they share a cell. The witch knows the hunter’s cell.',
+    'After the witch acts, the hunter always learns the bearing of that action. Holding still does not reveal Manhattan distance. The hunter does not see the witch unless they share a cell. The witch knows the hunter’s cell.',
 };
 
 const DIR_LABEL: Record<DirKey, string> = {
@@ -93,20 +95,35 @@ function moveCriteria(input: WitchTurnInput): Record<string, string> {
   for (const dest of input.options) {
     const direction = directionOf(input.witch, dest);
     const landsOnHunter = samePos(dest, input.hunter);
+    const landsOnTrap = input.trap !== null && samePos(dest, input.trap);
     const hunterCanReachNextTurn = hunterCanReach(input.hunter, dest, input.hunterMaxStep);
     const parts = [
-      `Move ${DIR_LABEL[direction]} to ${cellName(dest)} (${dest.x}, ${dest.y}).`,
+      direction === 'STAY'
+        ? `Hold still on ${cellName(dest)} (${dest.x}, ${dest.y}). The hunter learns only that she held still.`
+        : `Move ${DIR_LABEL[direction]} to ${cellName(dest)} (${dest.x}, ${dest.y}).`,
       `Manhattan to hunter: ${manhattan(dest, input.hunter)}.`,
       `Chebyshev to hunter: ${chebyshev(dest, input.hunter)}.`,
       landsOnHunter
         ? 'This lands on the hunter and loses immediately.'
-        : hunterCanReachNextTurn
-          ? 'The hunter can reach this cell on their next turn.'
-          : 'The hunter cannot reach this cell on their next turn.',
+        : landsOnTrap
+          ? 'This lands on the trap and loses immediately.'
+          : hunterCanReachNextTurn
+            ? 'The hunter can reach this cell on their next turn.'
+            : 'The hunter cannot reach this cell on their next turn.',
     ];
     criteria[direction] = parts.join(' ');
   }
   return criteria;
+}
+
+function witchDirectionQuestion(input: WitchTurnInput): string {
+  const rumoursPitch = input.rumoursAvailable
+    ? ' If `current.rumoursAvailable` is true the hunter can still spend Rumours later to learn Manhattan distance; STAY does not reveal it.'
+    : '';
+  return (
+    'Which direction from `possibleMoves` should the witch take this turn to best evade the hunter? The witch wins if she is still off the hunter’s cell after watch `current.maxTurns`. Never pick a move with `landsOnHunter` or `landsOnTrap` true if any other option exists. Never pick a move (including STAY) with `hunterCanReachNextTurn` true if any option has `hunterCanReachNextTurn` false. When `current.canStay` is true she may pick STAY only if that STAY option has `hunterCanReachNextTurn` false and every other useful option has `hunterCanReachNextTurn` true, `landsOnHunter` true, or `landsOnTrap` true. Prefer destinations the hunter cannot reach next turn, off the hunter’s orthogonal lines, with more distance and room to keep moving. Avoid `current.patrolCells` and `current.trap` when another option exists. `current.hounds` copy this step and fall off the board; they do not catch her.' +
+    rumoursPitch
+  );
 }
 
 async function askJev(input: WitchTurnInput): Promise<string> {
@@ -116,10 +133,12 @@ async function askJev(input: WitchTurnInput): Promise<string> {
     return {
       direction,
       destination: describePos(dest),
+      isStay: direction === 'STAY',
       manhattanToHunter: manhattan(dest, input.hunter),
       chebyshevToHunter: chebyshev(dest, input.hunter),
       hunterCanReachNextTurn: hunterCanReach(input.hunter, dest, input.hunterMaxStep),
       landsOnHunter: samePos(dest, input.hunter),
+      landsOnTrap: input.trap !== null && samePos(dest, input.trap),
     };
   });
 
@@ -130,8 +149,14 @@ async function askJev(input: WitchTurnInput): Promise<string> {
         boardSize: input.boardSize,
         turn: input.turn,
         maxTurns: input.maxTurns,
-        witchStayInterval: input.witchStayInterval,
-        witchMustHoldStill: input.mustStay,
+        canStay: input.canStay,
+        rumoursAvailable: input.rumoursAvailable,
+        patrolAvailable: input.patrolAvailable,
+        patrolCells: input.patrolCells.map(describePos),
+        houndsAvailable: input.houndsAvailable,
+        hounds: input.hounds.map(describePos),
+        trapAvailable: input.trapAvailable,
+        trap: input.trap ? describePos(input.trap) : null,
         hunterMaxStep: input.hunterMaxStep,
         hunter: describePos(input.hunter),
         witch: describePos(input.witch),
@@ -143,10 +168,7 @@ async function askJev(input: WitchTurnInput): Promise<string> {
       possibleMoves,
     },
     questions: {
-      direction: choice(
-        'Which direction from `possibleMoves` should the witch take this turn to best evade the hunter? The witch wins if she is still off the hunter’s cell after watch `current.maxTurns`. Never pick a move with `landsOnHunter` true if any other option exists. Prefer destinations the hunter cannot reach next turn, off the hunter’s orthogonal lines, with more distance and room to keep moving.',
-        criteria,
-      ),
+      direction: choice(witchDirectionQuestion(input), criteria),
     },
   });
 
@@ -226,7 +248,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return;
   }
 
-  if (parsed.options.length === 1 || parsed.mustStay) {
+  if (parsed.options.length === 1) {
     send(res, 200, { direction: directionOf(parsed.witch, parsed.options[0]) });
     return;
   }

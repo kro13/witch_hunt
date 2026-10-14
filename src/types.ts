@@ -6,13 +6,11 @@ export interface Pos {
 export interface GameConfig {
   boardSize: number;
   maxTurns: number;
-  witchStayInterval: number;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
   boardSize: 5,
   maxTurns: 25,
-  witchStayInterval: 5,
 };
 
 export type DirKey = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW' | 'STAY';
@@ -41,6 +39,15 @@ export const DIR_BY_KEY: Record<DirKey, Direction> = Object.fromEntries(
 
 export type Outcome = 'ongoing' | 'won' | 'lost';
 export type Phase = 'hunter' | 'resolving' | 'won' | 'lost';
+export type LineAxis = 'row' | 'col';
+export type HunterAction =
+  | 'rumours'
+  | 'patrol'
+  | 'patrolHit'
+  | 'hounds'
+  | 'trap'
+  | 'trapBroke'
+  | 'trapCaught';
 
 export interface HistoryEntry {
   turn: number;
@@ -50,6 +57,7 @@ export interface HistoryEntry {
   witchTo: Pos;
   direction: DirKey;
   manhattan: number | null;
+  action: HunterAction | null;
 }
 
 export interface GameState {
@@ -61,11 +69,15 @@ export interface GameState {
   history: HistoryEntry[];
   lastManhattan: number | null;
   manhattanRing: Pos[];
-  possibleWitch: Pos[];
-  scentCells: Pos[];
-  scentAge: number;
+  rumoursAvailable: boolean;
+  patrolAvailable: boolean;
+  patrolCells: Pos[];
+  patrolHit: boolean;
+  houndsAvailable: boolean;
+  hounds: Pos[];
+  trapAvailable: boolean;
+  trap: Pos | null;
   debug: boolean;
-  slowHunt: boolean;
   pendingHunterFrom: Pos | null;
 }
 

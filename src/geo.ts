@@ -1,4 +1,4 @@
-import { DIR_BY_KEY, type DirKey, type Pos } from './types.js';
+import { DIR_BY_KEY, type DirKey, type LineAxis, type Pos } from './types.js';
 
 export function samePos(a: Pos, b: Pos): boolean {
   return a.x === b.x && a.y === b.y;
@@ -41,18 +41,16 @@ export function directionOf(from: Pos, to: Pos): DirKey {
   return found?.key ?? 'STAY';
 }
 
-export function withoutCell(cells: Pos[], banned: Pos): Pos[] {
-  return cells.filter((p) => !samePos(p, banned));
-}
-
-export function shiftCells(cells: Pos[], dx: number, dy: number): Pos[] {
+export function lineCells(axis: LineAxis, index: number, size: number): Pos[] {
   const out: Pos[] = [];
-  for (const cell of cells) {
-    const next = { x: cell.x + dx, y: cell.y + dy };
-    if (out.some((p) => samePos(p, next))) {
-      continue;
+  if (axis === 'row') {
+    for (let x = 0; x < size; x += 1) {
+      out.push({ x, y: index });
     }
-    out.push(next);
+  } else {
+    for (let y = 0; y < size; y += 1) {
+      out.push({ x: index, y });
+    }
   }
   return out;
 }

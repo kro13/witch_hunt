@@ -20,14 +20,24 @@ function mobility(from: Pos, hunter: Pos, size: number, maxStep: number): number
   return count;
 }
 
-function score(dest: Pos, hunter: Pos, size: number, maxStep: number): number {
-  if (samePos(dest, hunter)) {
+function score(
+  dest: Pos,
+  hunter: Pos,
+  size: number,
+  maxStep: number,
+  patrolCells: Pos[],
+  trap: Pos | null,
+): number {
+  if (samePos(dest, hunter) || (trap && samePos(dest, trap))) {
     return -10_000;
   }
 
   let value = 0;
   if (hunterCanReach(hunter, dest, maxStep)) {
     value -= 600;
+  }
+  if (patrolCells.some((pos) => samePos(pos, dest))) {
+    value -= 450;
   }
 
   value += manhattan(dest, hunter) * 12;
@@ -48,18 +58,41 @@ function score(dest: Pos, hunter: Pos, size: number, maxStep: number): number {
   return value;
 }
 
-export function chooseWitchMove(options: Pos[], hunter: Pos, size: number, maxStep = 2): Pos {
+export function chooseWitchMove(
+  options: Pos[],
+  hunter: Pos,
+  size: number,
+  maxStep = 2,
+  from?: Pos,
+  patrolCells: Pos[] = [],
+  trap: Pos | null = null,
+): Pos {
   if (options.length === 0) {
     return { x: hunter.x, y: hunter.y };
   }
-  let best = options[0];
+
+  const stay = from ? options.find((pos) => samePos(pos, from)) : undefined;
+  const moves = from ? options.filter((pos) => !samePos(pos, from)) : options;
+  const pool = moves.length > 0 ? moves : options;
+
+  let best = pool[0];
   let bestScore = -Infinity;
-  for (const option of options) {
-    const value = score(option, hunter, size, maxStep);
+  for (const option of pool) {
+    const value = score(option, hunter, size, maxStep, patrolCells, trap);
     if (value > bestScore) {
       best = option;
       bestScore = value;
     }
   }
+
+  if (
+    stay &&
+    (samePos(best, hunter) ||
+      hunterCanReach(hunter, best, maxStep) ||
+      (trap !== null && samePos(best, trap)))
+  ) {
+    return { ...stay };
+  }
+
   return { ...best };
 }

@@ -10,10 +10,22 @@ export const copy = {
   boardLabel: 'Hunt field',
   compassLabel: 'Witch bearing',
 
-  hintMove: 'Click a marked cell, or use arrow keys (Shift for two steps).',
-  hintMoveSlow: 'Slow hunt: click a marked cell, or use arrow keys (one step).',
-  labelSlowHunt: 'Slow hunt',
+  hintMove: 'Move, or spend an action. An action ends the watch.',
   hintResolving: 'The mist shifts…',
+  hintPatrol: 'Patrol: click a cell, then another in the same row or column.',
+  hintPatrolLine: 'Click a cell in that row or column to set the line. Escape cancels.',
+  hintHounds: (placed: number) =>
+    `Hounds: click three cells${placed ? ` (${placed} of 3)` : ''}. Escape cancels.`,
+  hintTrap: 'Trap: click a cell. If she is on it, the trap breaks. Escape cancels.',
+
+  actionRumours: 'Rumours',
+  actionRumoursTitle: 'Learn her road-distance. Once per hunt. Ends your watch.',
+  actionPatrol: 'Patrol',
+  actionPatrolTitle: 'Mark a row or column. Once per hunt. Ends your watch.',
+  actionHounds: 'Hounds',
+  actionHoundsTitle: 'Place three hounds. They copy her step. Once per hunt. Ends your watch.',
+  actionTrap: 'Trap',
+  actionTrapTitle: 'Set a bear trap. It catches her if she steps on it. Once per hunt. Ends your watch.',
 
   panelWatch: 'The watch',
   panelBearing: 'Last bearing',
@@ -22,18 +34,11 @@ export const copy = {
   watchPrefix: 'Watch',
   watchOf: 'of',
 
-  stayBound: 'This watch she is bound to hold still.',
-  stayFree: 'She may slip one cell, any direction.',
+  stayFree: 'She may slip one cell, any direction, or hold still.',
   pulseUnknown: 'Road-distance unknown.',
   pulseFresh: (distance: number) =>
     `Road-distance ${distance}. Possible cells marked until you step.`,
   pulseLast: (distance: number) => `Last road-distance: ${distance} (Manhattan).`,
-  pulseTracking: 'Possible cells follow her last bearing.',
-  pulseScent: (age: number, distance: number) =>
-    `Witch scent of road-distance ${distance}. ${age} watches since reveal.`,
-  scentTooltip: (age: number) => `${age} watches since last distance reveal`,
-  labelTrack: 'Track the witch',
-  labelScent: 'Witch scent',
 
   compassNone: 'No stirring yet.',
   compassStay: 'She held still.',
@@ -42,12 +47,19 @@ export const copy = {
   journalEmpty: 'The page is still blank.',
   journalWatch: (turn: number) => `W${turn}`,
   journalDistance: (distance: number) => ` · road-distance ${distance}`,
+  journalRumours: (distance: number) => `Rumours · road-distance ${distance}`,
+  journalPatrol: 'Patrol',
+  journalPatrolHit: 'Patrol struck',
+  journalHounds: 'Hounds loosed',
+  journalTrap: 'Trap',
+  journalTrapBroke: 'Trap broke',
+  journalTrapCaught: 'Trap sprung',
 
   cellPossibleWitch: (cell: string) => `${cell} possible witch`,
 
   overlayRestart: 'Begin another watch',
   winKicker: 'Caught',
-  winTitle: 'Now burn the witch!',
+  winTitle: 'Now burn!',
   winBody: (turn: number, maxTurns: number) =>
     `Watch ${turn} of ${maxTurns}. The hunter found her.`,
   loseKicker: 'Escaped',
@@ -62,9 +74,13 @@ export const copy = {
   rulesTitle: 'Laws of the hunt',
   rules: [
     'You start in the middle. Move 1 or 2 cells, orthogonally only.',
-    'The witch steps 1 cell any way, including diagonal. You cannot see her until you share a cell.',
-    'After she moves, her bearing is logged here.',
-    'Every 5th watch she must hold still, and you learn her Manhattan distance.',
+    'The witch may step 1 cell any way, including diagonal, or hold still. You cannot see her until you share a cell.',
+    'After she acts, her bearing is logged here.',
+    'Each watch you either move or spend one action.',
+    'Once per hunt, Rumours reveals her Manhattan distance.',
+    'Once per hunt, Patrol marks a row or column. If she is on it when you set it, or occupies a marked cell later, the crosses flare until your next action.',
+    'Once per hunt, Hounds lets you mark three cells. They copy each of her steps and vanish off the edge.',
+    'Once per hunt, Trap marks a cell. If she steps on it, she is caught. If you set it on her cell, it breaks and vanishes.',
     'Catch her before the watches run out.',
   ],
 
@@ -96,5 +112,10 @@ export const copy = {
     notHunterTurn: 'Not the hunter’s turn.',
     stepNotAllowed: 'That step is not allowed.',
     witchNotMoving: 'Witch is not moving now.',
+    rumoursSpent: 'Those rumours are already spent.',
+    patrolSpent: 'That patrol is already spent.',
+    houndsSpent: 'The hounds are already spent.',
+    houndsNeedThree: 'Place three distinct cells.',
+    trapSpent: 'That trap is already spent.',
   },
 };

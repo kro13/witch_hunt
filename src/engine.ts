@@ -6,10 +6,9 @@ import {
   directionOf,
   hunterCanReach,
   inBounds,
+  lineCells,
   manhattan,
   samePos,
-  shiftCells,
-  withoutCell,
 } from './geo.js';
 import {
   DEFAULT_CONFIG,
@@ -19,6 +18,8 @@ import {
   type GameConfig,
   type GameState,
   type HistoryEntry,
+  type HunterAction,
+  type LineAxis,
   type Pos,
 } from './types.js';
 
@@ -28,12 +29,7 @@ export function clampConfig(partial: Partial<GameConfig> = {}): GameConfig {
   return {
     boardSize,
     maxTurns,
-    witchStayInterval: DEFAULT_CONFIG.witchStayInterval,
   };
-}
-
-export function hunterMaxStep(state: GameState): number {
-  return state.slowHunt ? 1 : 2;
 }
 
 export function hunterMoves(from: Pos, size: number, maxStep = 2): Pos[] {
@@ -46,11 +42,8 @@ export function hunterMoves(from: Pos, size: number, maxStep = 2): Pos[] {
     .filter((p) => inBounds(p, size));
 }
 
-export function witchMoves(from: Pos, size: number, mustStay: boolean): Pos[] {
-  if (mustStay) {
-    return [{ ...from }];
-  }
-  const out: Pos[] = [];
+export function witchMoves(from: Pos, size: number): Pos[] {
+  const out: Pos[] = [{ ...from }];
   for (let dy = -1; dy <= 1; dy += 1) {
     for (let dx = -1; dx <= 1; dx += 1) {
       if (dx === 0 && dy === 0) {
@@ -63,10 +56,6 @@ export function witchMoves(from: Pos, size: number, mustStay: boolean): Pos[] {
     }
   }
   return out;
-}
-
-export function witchMustStay(turn: number, interval: number): boolean {
-  return turn > 0 && turn % interval === 0;
 }
 
 function cloneState(state: GameState): GameState {
@@ -85,11 +74,15 @@ function cloneState(state: GameState): GameState {
     })),
     lastManhattan: state.lastManhattan,
     manhattanRing: state.manhattanRing.map((pos) => ({ ...pos })),
-    possibleWitch: state.possibleWitch.map((pos) => ({ ...pos })),
-    scentCells: state.scentCells.map((pos) => ({ ...pos })),
-    scentAge: state.scentAge,
+    rumoursAvailable: state.rumoursAvailable,
+    patrolAvailable: state.patrolAvailable,
+    patrolCells: state.patrolCells.map((pos) => ({ ...pos })),
+    patrolHit: state.patrolHit,
+    houndsAvailable: state.houndsAvailable,
+    hounds: state.hounds.map((pos) => ({ ...pos })),
+    trapAvailable: state.trapAvailable,
+    trap: state.trap ? { ...state.trap } : null,
     debug: state.debug,
-    slowHunt: state.slowHunt,
     pendingHunterFrom: state.pendingHunterFrom ? { ...state.pendingHunterFrom } : null,
   };
 }
@@ -111,15 +104,62 @@ function pickWitchSpawn(size: number, hunter: Pos): Pos {
   return { ...pool[Math.floor(Math.random() * pool.length)] };
 }
 
+export const HOUND_COUNT = 3;
+
+function shiftHounds(state: GameState, direction: DirKey): void {
+  if (direction === 'STAY' || state.hounds.length === 0) {
+    return;
+  }
+  const step = DIR_BY_KEY[direction];
+  const size = state.config.boardSize;
+  state.hounds = state.hounds
+    .map((pos) => ({ x: pos.x + step.dx, y: pos.y + step.dy }))
+    .filter((pos) => inBounds(pos, size));
+}
+
 function pulseDistance(state: GameState): void {
   const distance = manhattan(state.hunter, state.witch);
   state.lastManhattan = distance;
   state.manhattanRing = cellsAtManhattan(state.hunter, distance, state.config.boardSize);
-  state.scentCells = state.manhattanRing.map((pos) => ({ ...pos }));
-  state.scentAge = 0;
 }
 
-export function createGame(partial: Partial<GameConfig> = {}, debug = false, slowHunt = false): GameState {
+function expireHitPatrol(state: GameState): void {
+  if (state.patrolHit) {
+    state.patrolCells = [];
+    state.patrolHit = false;
+  }
+}
+
+function triggerPatrolIfOccupied(state: GameState): void {
+  if (state.patrolHit || state.patrolCells.length === 0) {
+    return;
+  }
+  if (!state.patrolCells.some((pos) => samePos(pos, state.witch))) {
+    return;
+  }
+  state.patrolHit = true;
+  recordAction(state, 'patrolHit');
+}
+
+function beginResolving(state: GameState): void {
+  state.pendingHunterFrom = { ...state.hunter };
+  state.phase = 'resolving';
+}
+
+function recordAction(state: GameState, action: HunterAction, manhattanDistance: number | null = null): void {
+  state.history.push({
+    turn: state.turn,
+    hunterFrom: { ...state.hunter },
+    hunterTo: { ...state.hunter },
+    witchFrom: { ...state.witch },
+    witchTo: { ...state.witch },
+    direction: 'STAY',
+    manhattan: manhattanDistance,
+    action,
+  });
+}
+
+export function createGame(partial: Partial<GameConfig> = {}, debug = false): GameState {
   const config = clampConfig(partial);
   const hunter = centerPos(config.boardSize);
   const witch = pickWitchSpawn(config.boardSize, hunter);
@@ -132,18 +172,17 @@ export function createGame(partial: Partial<GameConfig> = {}, debug = false, slo
     history: [],
     lastManhattan: null,
     manhattanRing: [],
-    possibleWitch: [],
-    scentCells: [],
-    scentAge: 0,
+    rumoursAvailable: true,
+    patrolAvailable: true,
+    patrolCells: [],
+    patrolHit: false,
+    houndsAvailable: true,
+    hounds: [],
+    trapAvailable: true,
+    trap: null,
     debug,
-    slowHunt,
     pendingHunterFrom: null,
   };
-  pulseDistance(state);
-  state.possibleWitch = state.manhattanRing.map((pos) => ({ ...pos }));
-  state.history.push(
-    record(state, state.hunter, state.witch, state.witch, 'STAY', state.lastManhattan, 0),
-  );
   return state;
 }
 
@@ -151,18 +190,15 @@ export function applyHunterMove(state: GameState, to: Pos): ApplyMoveResult {
   if (state.phase !== 'hunter') {
     return { ok: false, reason: copy.engine.notHunterTurn, state };
   }
-  if (
-    !hunterCanReach(state.hunter, to, hunterMaxStep(state)) ||
-    !inBounds(to, state.config.boardSize)
-  ) {
+  if (!hunterCanReach(state.hunter, to) || !inBounds(to, state.config.boardSize)) {
     return { ok: false, reason: copy.engine.stepNotAllowed, state };
   }
 
   const next = cloneState(state);
+  expireHitPatrol(next);
   next.manhattanRing = [];
   next.pendingHunterFrom = { ...next.hunter };
   next.hunter = { ...to };
-  next.possibleWitch = withoutCell(next.possibleWitch, next.hunter);
 
   if (samePos(next.hunter, next.witch)) {
     next.phase = 'won';
@@ -174,6 +210,99 @@ export function applyHunterMove(state: GameState, to: Pos): ApplyMoveResult {
   return { ok: true, state: next };
 }
 
+export function useRumours(state: GameState): ApplyMoveResult {
+  if (state.phase !== 'hunter') {
+    return { ok: false, reason: copy.engine.notHunterTurn, state };
+  }
+  if (!state.rumoursAvailable) {
+    return { ok: false, reason: copy.engine.rumoursSpent, state };
+  }
+
+  const next = cloneState(state);
+  expireHitPatrol(next);
+  next.rumoursAvailable = false;
+  pulseDistance(next);
+  recordAction(next, 'rumours', next.lastManhattan);
+  beginResolving(next);
+  return { ok: true, state: next };
+}
+
+export function usePatrol(state: GameState, axis: LineAxis, index: number): ApplyMoveResult {
+  if (state.phase !== 'hunter') {
+    return { ok: false, reason: copy.engine.notHunterTurn, state };
+  }
+  if (!state.patrolAvailable) {
+    return { ok: false, reason: copy.engine.patrolSpent, state };
+  }
+  const size = state.config.boardSize;
+  if (index < 0 || index >= size) {
+    return { ok: false, reason: copy.engine.stepNotAllowed, state };
+  }
+
+  const next = cloneState(state);
+  expireHitPatrol(next);
+  next.patrolAvailable = false;
+  next.patrolCells = lineCells(axis, index, size);
+  next.patrolHit = false;
+  recordAction(next, 'patrol');
+  triggerPatrolIfOccupied(next);
+  beginResolving(next);
+  return { ok: true, state: next };
+}
+
+export function useHounds(state: GameState, cells: Pos[]): ApplyMoveResult {
+  if (state.phase !== 'hunter') {
+    return { ok: false, reason: copy.engine.notHunterTurn, state };
+  }
+  if (!state.houndsAvailable) {
+    return { ok: false, reason: copy.engine.houndsSpent, state };
+  }
+  const size = state.config.boardSize;
+  const unique: Pos[] = [];
+  for (const cell of cells) {
+    if (!inBounds(cell, size) || unique.some((pos) => samePos(pos, cell))) {
+      return { ok: false, reason: copy.engine.houndsNeedThree, state };
+    }
+    unique.push({ ...cell });
+  }
+  if (unique.length !== HOUND_COUNT) {
+    return { ok: false, reason: copy.engine.houndsNeedThree, state };
+  }
+
+  const next = cloneState(state);
+  expireHitPatrol(next);
+  next.houndsAvailable = false;
+  next.hounds = unique;
+  recordAction(next, 'hounds');
+  beginResolving(next);
+  return { ok: true, state: next };
+}
+
+export function useTrap(state: GameState, cell: Pos): ApplyMoveResult {
+  if (state.phase !== 'hunter') {
+    return { ok: false, reason: copy.engine.notHunterTurn, state };
+  }
+  if (!state.trapAvailable) {
+    return { ok: false, reason: copy.engine.trapSpent, state };
+  }
+  if (!inBounds(cell, state.config.boardSize)) {
+    return { ok: false, reason: copy.engine.stepNotAllowed, state };
+  }
+
+  const next = cloneState(state);
+  expireHitPatrol(next);
+  next.trapAvailable = false;
+  if (samePos(cell, next.witch)) {
+    next.trap = null;
+    recordAction(next, 'trapBroke');
+  } else {
+    next.trap = { ...cell };
+    recordAction(next, 'trap');
+  }
+  beginResolving(next);
+  return { ok: true, state: next };
+}
+
 export async function resolveWitchTurn(state: GameState): Promise<ApplyMoveResult> {
   if (state.phase !== 'resolving') {
     return { ok: false, reason: copy.engine.witchNotMoving, state };
@@ -181,45 +310,44 @@ export async function resolveWitchTurn(state: GameState): Promise<ApplyMoveResul
 
   const next = cloneState(state);
   const hunterFrom = next.pendingHunterFrom ?? { ...next.hunter };
-  const mustStay = witchMustStay(next.turn, next.config.witchStayInterval);
-  const options = witchMoves(next.witch, next.config.boardSize, mustStay);
+  const options = witchMoves(next.witch, next.config.boardSize);
   const witchFrom = { ...next.witch };
-  const maxStep = hunterMaxStep(next);
   const witchTo = await chooseWitchMove({
     boardSize: next.config.boardSize,
     maxTurns: next.config.maxTurns,
     turn: next.turn,
-    witchStayInterval: next.config.witchStayInterval,
     hunter: next.hunter,
     witch: next.witch,
-    hunterMaxStep: maxStep,
-    mustStay,
+    hunterMaxStep: 2,
+    canStay: true,
     lastManhattan: next.lastManhattan,
+    rumoursAvailable: next.rumoursAvailable,
+    patrolAvailable: next.patrolAvailable,
+    patrolCells: next.patrolCells,
+    houndsAvailable: next.houndsAvailable,
+    hounds: next.hounds,
+    trapAvailable: next.trapAvailable,
+    trap: next.trap,
     options,
-    hunterReachableNextTurn: hunterMoves(next.hunter, next.config.boardSize, maxStep),
+    hunterReachableNextTurn: hunterMoves(next.hunter, next.config.boardSize),
   });
   next.witch = { ...witchTo };
 
   const direction = directionOf(witchFrom, witchTo);
-  const step = DIR_BY_KEY[direction];
-  next.possibleWitch = withoutCell(
-    shiftCells(next.possibleWitch, step.dx, step.dy),
-    next.hunter,
-  );
-  if (mustStay) {
-    pulseDistance(next);
-    next.possibleWitch = withoutCell(
-      next.manhattanRing.map((pos) => ({ ...pos })),
-      next.hunter,
-    );
-  } else {
-    next.scentAge += 1;
-  }
+  shiftHounds(next, direction);
 
   next.history.push(
-    record(next, hunterFrom, witchFrom, witchTo, direction, mustStay ? next.lastManhattan : null),
+    record(next, hunterFrom, witchFrom, witchTo, direction),
   );
   next.pendingHunterFrom = null;
+
+  if (next.trap && samePos(next.witch, next.trap)) {
+    recordAction(next, 'trapCaught');
+    next.phase = 'won';
+    return { ok: true, state: next };
+  }
+
+  triggerPatrolIfOccupied(next);
 
   if (samePos(next.hunter, next.witch)) {
     next.phase = 'won';
@@ -253,15 +381,12 @@ function record(
     witchTo,
     direction,
     manhattan: manhattanDistance,
+    action: null,
   };
 }
 
 export function setDebug(state: GameState, debug: boolean): GameState {
   return { ...state, debug };
-}
-
-export function setSlowHunt(state: GameState, slowHunt: boolean): GameState {
-  return { ...state, slowHunt };
 }
 
 export function witchIsVisible(state: GameState): boolean {

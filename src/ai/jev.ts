@@ -7,12 +7,18 @@ export interface WitchTurnInput {
   boardSize: number;
   maxTurns: number;
   turn: number;
-  witchStayInterval: number;
   hunter: Pos;
   witch: Pos;
   hunterMaxStep: number;
-  mustStay: boolean;
+  canStay: boolean;
   lastManhattan: number | null;
+  rumoursAvailable: boolean;
+  patrolAvailable: boolean;
+  patrolCells: Pos[];
+  houndsAvailable: boolean;
+  hounds: Pos[];
+  trapAvailable: boolean;
+  trap: Pos | null;
   options: Pos[];
   hunterReachableNextTurn: Pos[];
 }
@@ -33,6 +39,9 @@ function fallbackMove(input: WitchTurnInput): Pos {
     input.hunter,
     input.boardSize,
     input.hunterMaxStep,
+    input.canStay ? input.witch : undefined,
+    input.patrolCells,
+    input.trap,
   );
 }
 
@@ -60,7 +69,7 @@ export async function chooseWitchMove(input: WitchTurnInput): Promise<Pos> {
   if (input.options.length === 0) {
     return { ...input.witch };
   }
-  if (input.options.length === 1 || input.mustStay) {
+  if (input.options.length === 1) {
     return { ...input.options[0] };
   }
 
