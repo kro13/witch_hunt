@@ -93,16 +93,18 @@ function describePos(pos: Pos): { x: number; y: number; cell: string } {
 function moveCriteria(input: WitchTurnInput): Record<string, string> {
   const criteria: Record<string, string> = {};
   for (const dest of input.options) {
-    const direction = directionOf(input.witch, dest);
-    const landsOnHunter = samePos(dest, input.hunter);
-    const landsOnTrap = input.trap !== null && samePos(dest, input.trap);
+    const origin = input.model === 'jev_hunter' ? input.hunter : input.witch;
+    const direction = input.model === 'jev_hunter'
+      ? `${directionOf(origin, dest)}${manhattan(origin, dest)}`
+      : directionOf(origin, dest);
+    const landsOnHunter = input.model === 'jev_hunter' ? false : samePos(dest, input.hunter);
+    const landsOnTrap = input.model === 'jev_hunter' ? false : input.trap !== null && samePos(dest, input.trap);
     const hunterCanReachNextTurn = hunterCanReach(input.hunter, dest, input.hunterMaxStep);
     const parts = [
       direction === 'STAY'
         ? `Hold still on ${cellName(dest)} (${dest.x}, ${dest.y}). The hunter learns only that she held still.`
-        : `Move ${DIR_LABEL[direction]} to ${cellName(dest)} (${dest.x}, ${dest.y}).`,
-      `Manhattan to hunter: ${manhattan(dest, input.hunter)}.`,
-      `Chebyshev to hunter: ${chebyshev(dest, input.hunter)}.`,
+        : `Move ${DIR_LABEL[direction as DirKey] ?? direction} to ${cellName(dest)} (${dest.x}, ${dest.y}).`,
+      ...(input.model === 'jev_hunter' ? [] : [`Manhattan to hunter: ${manhattan(dest, input.hunter)}.`, `Chebyshev to hunter: ${chebyshev(dest, input.hunter)}.`]),
       landsOnHunter
         ? 'This lands on the hunter and loses immediately.'
         : landsOnTrap
@@ -111,12 +113,16 @@ function moveCriteria(input: WitchTurnInput): Record<string, string> {
             ? 'The hunter can reach this cell on their next turn.'
             : 'The hunter cannot reach this cell on their next turn.',
     ];
-    criteria[direction] = parts.join(' ');
+    criteria[input.model === 'jev_hunter' ? `MOVE:${direction}` : direction] = parts.join(' ');
   }
+  for (const action of input.hunterChoices ?? []) criteria[action.id] = action.instruction;
   return criteria;
 }
 
 function witchDirectionQuestion(input: WitchTurnInput): string {
+  if (input.model === 'jev_hunter') {
+    return 'The witch position is hidden. Infer likely positions from observed bearings and use the supplied belief cells as uncertain candidates, never as certainty. Choose a legal hunter move or an action listed in possibleMoves. Spend Rumours to learn distance when it will narrow the search; use Patrol to test a promising row or column; use Hounds to cover likely positions; use Trap to cover a likely cell. Choose actions when their information or coverage is more useful than moving. Never assume you can catch a witch whose exact position you do not know.';
+  }
   const rumoursPitch = input.rumoursAvailable
     ? ' If `current.rumoursAvailable` is true the hunter can still spend Rumours later to learn Manhattan distance; STAY does not reveal it.'
     : '';
@@ -129,18 +135,26 @@ function witchDirectionQuestion(input: WitchTurnInput): string {
 async function askJev(input: WitchTurnInput): Promise<string> {
   const criteria = moveCriteria(input);
   const possibleMoves = input.options.map((dest) => {
-    const direction = directionOf(input.witch, dest);
+    const origin = input.model === 'jev_hunter' ? input.hunter : input.witch;
+    const direction = input.model === 'jev_hunter'
+      ? `${directionOf(origin, dest)}${manhattan(origin, dest)}`
+      : directionOf(origin, dest);
     return {
-      direction,
+      direction: input.model === 'jev_hunter' ? `MOVE:${direction}` : direction,
       destination: describePos(dest),
       isStay: direction === 'STAY',
-      manhattanToHunter: manhattan(dest, input.hunter),
-      chebyshevToHunter: chebyshev(dest, input.hunter),
-      hunterCanReachNextTurn: hunterCanReach(input.hunter, dest, input.hunterMaxStep),
-      landsOnHunter: samePos(dest, input.hunter),
-      landsOnTrap: input.trap !== null && samePos(dest, input.trap),
+      ...(input.model === 'jev_hunter' ? {} : {
+        manhattanToHunter: manhattan(dest, input.hunter),
+        chebyshevToHunter: chebyshev(dest, input.hunter),
+        hunterCanReachNextTurn: hunterCanReach(input.hunter, dest, input.hunterMaxStep),
+        landsOnHunter: samePos(dest, input.hunter),
+        landsOnTrap: input.trap !== null && samePos(dest, input.trap),
+      }),
     };
   });
+  if (input.model === 'jev_hunter') {
+    possibleMoves.push(...(input.hunterChoices ?? []).map((action) => ({ direction: action.id, instruction: action.instruction })) as unknown as typeof possibleMoves);
+  }
 
   const response = await getClient().systemOne({
     state: {
@@ -159,9 +173,14 @@ async function askJev(input: WitchTurnInput): Promise<string> {
         trap: input.trap ? describePos(input.trap) : null,
         hunterMaxStep: input.hunterMaxStep,
         hunter: describePos(input.hunter),
-        witch: describePos(input.witch),
-        manhattanNow: manhattan(input.hunter, input.witch),
-        lastManhattanPulse: input.lastManhattan,
+        ...(input.model === 'jev_witch' ? {
+          witch: describePos(input.witch),
+          manhattanNow: manhattan(input.hunter, input.witch),
+          lastManhattanPulse: input.lastManhattan,
+        } : { observations: (input.observations ?? []).map((item) => ({
+          turn: item.turn, direction: item.direction, hunterFrom: describePos(item.hunterFrom),
+          hunterTo: describePos(item.hunterTo), action: item.action,
+        })), belief: (input.belief ?? []).map(describePos) }),
         hunterReachableNextTurn: input.hunterReachableNextTurn.map(describePos),
         lastWatchOfHunt: input.turn >= input.maxTurns,
       },
@@ -211,7 +230,8 @@ function isWitchTurnInput(value: unknown): value is WitchTurnInput {
     return false;
   }
   const input = value as WitchTurnInput;
-  return isPos(input.hunter) && isPos(input.witch) && Array.isArray(input.options);
+  return (input.model === 'jev_witch' || input.model === 'jev_hunter') && isPos(input.hunter) &&
+    (input.model === 'jev_hunter' || isPos(input.witch)) && Array.isArray(input.options);
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

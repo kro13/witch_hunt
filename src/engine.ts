@@ -303,7 +303,7 @@ export function useTrap(state: GameState, cell: Pos): ApplyMoveResult {
   return { ok: true, state: next };
 }
 
-export async function resolveWitchTurn(state: GameState): Promise<ApplyMoveResult> {
+export async function resolveWitchTurn(state: GameState, playerMove?: Pos): Promise<ApplyMoveResult> {
   if (state.phase !== 'resolving') {
     return { ok: false, reason: copy.engine.witchNotMoving, state };
   }
@@ -312,7 +312,8 @@ export async function resolveWitchTurn(state: GameState): Promise<ApplyMoveResul
   const hunterFrom = next.pendingHunterFrom ?? { ...next.hunter };
   const options = witchMoves(next.witch, next.config.boardSize);
   const witchFrom = { ...next.witch };
-  const witchTo = await chooseWitchMove({
+  const witchTo = playerMove ? { ...playerMove } : await chooseWitchMove({
+    model: 'jev_witch',
     boardSize: next.config.boardSize,
     maxTurns: next.config.maxTurns,
     turn: next.turn,

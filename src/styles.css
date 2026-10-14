@@ -344,6 +344,15 @@ h1 {
   display: none;
 }
 
+.role-picker { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: #080706dd; }
+.role-picker[hidden] { display: none; }
+.role-card { width: min(32rem, 100%); padding: 24px; border: 1px solid var(--brass-deep); background: #1d1812; box-shadow: 0 16px 40px #000a; text-align: center; }
+.role-card h2 { margin: 0 0 20px; font: 400 2rem 'IM Fell English', serif; }
+.role-options { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.role-option { display: grid; justify-items: center; gap: 14px; }
+.role-icon { display: grid; place-items: center; width: 100px; height: 110px; }
+.role-icon .token { width: 64px; height: 80px; }
+
 .overlay-card {
   max-width: 22rem;
   padding: 22px 22px 18px;

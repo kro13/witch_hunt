@@ -5,14 +5,15 @@ import {
   HOUND_COUNT,
   hunterMoves,
   resolveWitchTurn,
-  setDebug,
   useHounds,
   usePatrol,
   useRumours,
   useTrap,
+  setDebug,
   witchIsVisible,
 } from './engine.js';
-import { hunterCanReach, lineCells, samePos } from './geo.js';
+import { directionOf, hunterCanReach, lineCells, samePos } from './geo.js';
+import { chooseHunterDecision } from './ai/jev.js';
 import { type ApplyMoveResult, type DirKey, type GameState, type LineAxis, type Pos } from './types.js';
 
 const HUNTER_SVG = `
@@ -83,6 +84,8 @@ const trapBtn = document.querySelector<HTMLButtonElement>('#action-trap')!;
 const hintEl = document.querySelector('#move-hint')!;
 
 let state: GameState = createGame();
+let playerRole: 'hunter' | 'witch' = 'hunter';
+let awaitingWitchSpawn = false;
 let busy = false;
 let patrolMode = false;
 let patrolAnchor: Pos | null = null;
@@ -148,11 +151,15 @@ function render(): void {
     buildBoard(size);
   }
 
-  const moves =
-    state.phase === 'hunter' && !patrolMode && !houndsMode && !trapMode
+  const spawnCells = awaitingWitchSpawn ? witchSpawnCells() : [];
+  const moves = awaitingWitchSpawn
+      ? spawnCells
+      : playerRole === 'hunter' && state.phase === 'hunter' && !patrolMode && !houndsMode && !trapMode
       ? hunterMoves(state.hunter, size)
+      : playerRole === 'witch' && state.phase === 'resolving'
+        ? [state.witch, ...Array.from({ length: 8 }, (_, i) => ({ x: state.witch.x + [-1,0,1,-1,1,-1,0,1][i], y: state.witch.y + [-1,-1,-1,0,0,1,1,1][i] })).filter((p) => p.x >= 0 && p.y >= 0 && p.x < size && p.y < size)]
       : [];
-  const showWitch = witchIsVisible(state);
+  const showWitch = !awaitingWitchSpawn && (playerRole === 'witch' || witchIsVisible(state));
   const preview = patrolPreviewCells();
 
   for (const cell of boardEl.querySelectorAll<HTMLButtonElement>('.cell')) {
@@ -242,8 +249,10 @@ function render(): void {
   renderOverlay();
   renderActions();
 
-  if (state.phase === 'resolving') {
-    hintEl.textContent = copy.hintResolving;
+  if (awaitingWitchSpawn) {
+    hintEl.textContent = 'Choose a highlighted tile for the witch to begin the hunt.';
+  } else if (state.phase === 'resolving') {
+    hintEl.textContent = playerRole === 'witch' ? 'Choose a neighboring cell to move the witch, or hold still.' : copy.hintResolving;
   } else if (houndsMode) {
     hintEl.textContent = copy.hintHounds(houndsPicks.length);
   } else if (trapMode) {
@@ -405,6 +414,25 @@ function renderOverlay(): void {
 }
 
 async function onCellClick(x: number, y: number): Promise<void> {
+  if (awaitingWitchSpawn) {
+    const selected = { x, y };
+    if (!witchSpawnCells().some((p) => samePos(p, selected))) return;
+    state = { ...state, witch: selected };
+    awaitingWitchSpawn = false;
+    void playComputerHunterTurn();
+    return;
+  }
+  if (playerRole === 'witch' && state.phase === 'resolving') {
+    const dest = { x, y };
+    const dx = Math.abs(dest.x - state.witch.x), dy = Math.abs(dest.y - state.witch.y);
+    if (dx > 1 || dy > 1) return;
+    busy = true; render();
+    state = (await resolveWitchTurn(state, dest)).state;
+    if (state.phase === 'hunter') await playComputerHunterTurn();
+    busy = false; render();
+    return;
+  }
+  if (playerRole !== 'hunter') return;
   if (busy || state.phase !== 'hunter') {
     return;
   }
@@ -499,6 +527,78 @@ async function playHunterTurn(apply: () => ApplyMoveResult): Promise<void> {
   render();
 }
 
+function jevInput(model: 'jev_hunter' | 'jev_witch') {
+  const belief = witchBelief();
+  const hunterChoices: Array<{ id: string; instruction: string }> = [];
+  if (state.rumoursAvailable) hunterChoices.push({ id: 'RUMOURS', instruction: 'Spend Rumours to learn the exact Manhattan distance to the hidden witch.' });
+  if (state.patrolAvailable) {
+    for (let i = 0; i < state.config.boardSize; i += 1) {
+      const rowCount = belief.filter((p) => p.y === i).length;
+      const colCount = belief.filter((p) => p.x === i).length;
+      hunterChoices.push({ id: `PATROL_R_${i}`, instruction: `Patrol row ${i + 1}; ${rowCount} of ${belief.length} plausible positions lie on it.` });
+      hunterChoices.push({ id: `PATROL_C_${i}`, instruction: `Patrol column ${String.fromCharCode(65 + i)}; ${colCount} of ${belief.length} plausible positions lie on it.` });
+    }
+  }
+  if (state.trapAvailable) for (const p of belief) hunterChoices.push({ id: `TRAP_${p.x}_${p.y}`, instruction: `Set a trap at ${String.fromCharCode(65 + p.x)}${p.y + 1}, a plausible witch position.` });
+  if (state.houndsAvailable && belief.length >= 3) {
+    const cells = belief.slice(0, 3);
+    hunterChoices.push({ id: `HOUNDS_${cells.map((p) => `${p.x}_${p.y}`).join('_')}`, instruction: `Place hounds at three plausible cells: ${cells.map((p) => `${String.fromCharCode(65 + p.x)}${p.y + 1}`).join(', ')}.` });
+  }
+  return {
+    model, boardSize: state.config.boardSize, maxTurns: state.config.maxTurns, turn: state.turn,
+    hunter: state.hunter, witch: state.witch, hunterMaxStep: 2, canStay: true,
+    lastManhattan: state.lastManhattan, rumoursAvailable: state.rumoursAvailable,
+    patrolAvailable: state.patrolAvailable, patrolCells: state.patrolCells,
+    houndsAvailable: state.houndsAvailable, hounds: state.hounds, trapAvailable: state.trapAvailable,
+    trap: state.trap, options: hunterMoves(state.hunter, state.config.boardSize),
+    hunterReachableNextTurn: hunterMoves(state.hunter, state.config.boardSize),
+    observations: state.history.map(({ turn, direction, hunterFrom, hunterTo, action }) => ({ turn, direction, hunterFrom, hunterTo, action })),
+    belief,
+    hunterChoices,
+  };
+}
+
+function witchBelief(): Pos[] {
+  const size = state.config.boardSize;
+  const start = { x: Math.floor(size / 2), y: Math.floor(size / 2) };
+  let cells: Pos[] = [];
+  for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+    if (Math.abs(x - start.x) + Math.abs(y - start.y) >= Math.max(2, Math.floor(size / 2))) cells.push({ x, y });
+  }
+  const delta: Record<string, Pos> = { N:{x:0,y:-1}, NE:{x:1,y:-1}, E:{x:1,y:0}, SE:{x:1,y:1}, S:{x:0,y:1}, SW:{x:-1,y:1}, W:{x:-1,y:0}, NW:{x:-1,y:-1}, STAY:{x:0,y:0} };
+  for (const entry of state.history) if (entry.action === null) {
+    const d = delta[entry.direction];
+    if (d) cells = cells.map((p) => ({ x: p.x + d.x, y: p.y + d.y })).filter((p) => p.x >= 0 && p.y >= 0 && p.x < size && p.y < size);
+  }
+  return [...new Map(cells.map((p) => [`${p.x},${p.y}`, p])).values()];
+}
+
+function witchSpawnCells(): Pos[] {
+  const size = state.config.boardSize;
+  const minimumDistance = Math.max(2, Math.floor(size / 2));
+  return Array.from({ length: size * size }, (_, index) => ({ x: index % size, y: Math.floor(index / size) }))
+    .filter((pos) => Math.abs(pos.x - state.hunter.x) + Math.abs(pos.y - state.hunter.y) >= minimumDistance);
+}
+
+async function playComputerHunterTurn(): Promise<void> {
+  busy = true; render();
+  const input = jevInput('jev_hunter');
+  const decision = await chooseHunterDecision(input);
+  if (decision.startsWith('MOVE:')) {
+    const key = decision.slice(5);
+    const destination = input.options.find((p) => `${directionOf(state.hunter, p)}${Math.abs(p.x - state.hunter.x) + Math.abs(p.y - state.hunter.y)}` === key);
+    state = applyHunterMove(state, destination ?? input.options[0]).state;
+  } else if (decision === 'RUMOURS') state = useRumours(state).state;
+  else if (decision.startsWith('PATROL_R_')) state = usePatrol(state, 'row', Number(decision.slice(9))).state;
+  else if (decision.startsWith('PATROL_C_')) state = usePatrol(state, 'col', Number(decision.slice(9))).state;
+  else if (decision.startsWith('TRAP_')) { const [x, y] = decision.slice(5).split('_').map(Number); state = useTrap(state, { x, y }).state; }
+  else if (decision.startsWith('HOUNDS_')) {
+    const nums = decision.slice(7).split('_').map(Number);
+    state = useHounds(state, [{x:nums[0],y:nums[1]},{x:nums[2],y:nums[3]},{x:nums[4],y:nums[5]}]).state;
+  }
+  busy = false; render();
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -513,6 +613,7 @@ function restart(): void {
   boardSizeInput.value = String(state.config.boardSize);
   maxTurnsInput.value = String(state.config.maxTurns);
   busy = false;
+  rolePicker.hidden = false;
   render();
 }
 
@@ -655,6 +756,19 @@ function applyShellCopy(): void {
     }
   }
 }
+
+const rolePicker = document.createElement('div');
+rolePicker.className = 'role-picker';
+rolePicker.innerHTML = `<section class="role-card" role="dialog" aria-modal="true" aria-labelledby="role-title"><h2 id="role-title">Choose your side</h2><div class="role-options"><div class="role-option"><span class="role-icon" id="role-hunter-icon"></span><button class="btn" id="choose-hunter">Play as hunter</button></div><div class="role-option"><span class="role-icon" id="role-witch-icon"></span><button class="btn" id="choose-witch">Play as witch</button></div></div></section>`;
+document.body.append(rolePicker);
+rolePicker.querySelector('#role-hunter-icon')!.append(token('hunter'));
+rolePicker.querySelector('#role-witch-icon')!.append(token('witch'));
+rolePicker.querySelector('#choose-hunter')!.addEventListener('click', () => {
+  playerRole = 'hunter'; rolePicker.hidden = true; render();
+});
+rolePicker.querySelector('#choose-witch')!.addEventListener('click', () => {
+  playerRole = 'witch'; awaitingWitchSpawn = true; rolePicker.hidden = true; render();
+});
 
 applyShellCopy();
 buildBoard(state.config.boardSize);
