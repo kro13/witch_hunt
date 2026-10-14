@@ -772,4 +772,25 @@ rolePicker.querySelector('#choose-witch')!.addEventListener('click', () => {
 
 applyShellCopy();
 buildBoard(state.config.boardSize);
+const entryChoice = document.querySelector<HTMLElement>('#entry-choice')!;
+const telegram = (window as Window & { Telegram?: { WebApp?: { initData?: string; openTelegramLink?: (url: string) => void } } }).Telegram?.WebApp;
+const botUsername = document.querySelector<HTMLMetaElement>('meta[name="telegram-bot-username"]')?.content;
+const inTelegram = Boolean(telegram?.initData);
+const sessionId = new URLSearchParams(location.search).get('session');
+entryChoice.hidden = Boolean(sessionId);
+rolePicker.hidden = true;
+if (sessionId) {
+  // A session link is only a lobby entry point. The bot server verifies identity
+  // and role claims; gameplay networking is supplied by the configured API.
+  entryChoice.hidden = true;
+}
+document.querySelector('#play-single')!.addEventListener('click', () => {
+  entryChoice.hidden = true;
+  rolePicker.hidden = false;
+});
+document.querySelector('#invite-friend')!.addEventListener('click', () => {
+  const botUrl = botUsername ? `https://t.me/${botUsername}?start=create` : '';
+  if (inTelegram && botUrl) telegram?.openTelegramLink?.(botUrl);
+  else alert('Open this game from your Telegram bot to create an invite session.');
+});
 render();

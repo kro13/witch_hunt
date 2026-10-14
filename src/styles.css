@@ -564,6 +564,16 @@ input[type='number'] {
   border-color: var(--brass);
 }
 
+.entry-choice {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 auto 24px;
+}
+
+.entry-choice[hidden] { display: none; }
+.entry-choice .btn { min-width: 170px; }
+
 .btn-ghost {
   width: 100%;
   background: transparent;
