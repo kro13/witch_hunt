@@ -85,6 +85,8 @@ const hintEl = document.querySelector('#move-hint')!;
 
 let state: GameState = createGame();
 let playerRole: 'hunter' | 'witch' = 'hunter';
+let multiplayerSessionId: string | null = null;
+let multiplayerInitData = '';
 let awaitingWitchSpawn = false;
 let busy = false;
 let patrolMode = false;
@@ -302,7 +304,7 @@ function cancelPlacement(): void {
 }
 
 function renderActions(): void {
-  const hunterReady = !busy && state.phase === 'hunter';
+  const hunterReady = !busy && playerRole === 'hunter' && state.phase === 'hunter';
   rumoursBtn.disabled = !hunterReady || !state.rumoursAvailable;
   rumoursBtn.textContent = copy.actionRumours;
   rumoursBtn.title = copy.actionRumoursTitle;
@@ -414,7 +416,9 @@ function renderOverlay(): void {
 }
 
 async function onCellClick(x: number, y: number): Promise<void> {
-  if (awaitingWitchSpawn) {
+  if (multiplayerSessionId && ((playerRole === 'hunter' && state.phase !== 'hunter') || (playerRole === 'witch' && state.phase !== 'resolving'))) {
+    hintEl.textContent = `Waiting for the ${playerRole === 'hunter' ? 'Witch' : 'Hunter'} to act.`;
+  } else if (awaitingWitchSpawn) {
     const selected = { x, y };
     if (!witchSpawnCells().some((p) => samePos(p, selected))) return;
     state = { ...state, witch: selected };
@@ -426,6 +430,10 @@ async function onCellClick(x: number, y: number): Promise<void> {
     const dest = { x, y };
     const dx = Math.abs(dest.x - state.witch.x), dy = Math.abs(dest.y - state.witch.y);
     if (dx > 1 || dy > 1) return;
+    if (multiplayerSessionId) {
+      void sendMultiplayerAction({ type: 'witchMove', to: dest });
+      return;
+    }
     busy = true; render();
     state = (await resolveWitchTurn(state, dest)).state;
     if (state.phase === 'hunter') await playComputerHunterTurn();
@@ -446,13 +454,13 @@ async function onCellClick(x: number, y: number): Promise<void> {
     return;
   }
   if (trapMode) {
-    void playHunterTurn(() => useTrap(state, to));
+    void playHunterTurn(() => useTrap(state, to), { type: 'trap', cell: to });
     return;
   }
   if (!hunterCanReach(state.hunter, to)) {
     return;
   }
-  await playHunterTurn(() => applyHunterMove(state, to));
+  await playHunterTurn(() => applyHunterMove(state, to), { type: 'move', to });
 }
 
 function onPatrolCell(pos: Pos): void {
@@ -480,7 +488,7 @@ function onPatrolCell(pos: Pos): void {
     render();
     return;
   }
-  void playHunterTurn(() => usePatrol(state, axis, index));
+  void playHunterTurn(() => usePatrol(state, axis, index), { type: 'patrol', axis, index });
 }
 
 function onHoundCell(pos: Pos): void {
@@ -496,15 +504,22 @@ function onHoundCell(pos: Pos): void {
     return;
   }
   const cells = houndsPicks.map((picked) => ({ ...picked }));
-  void playHunterTurn(() => useHounds(state, cells));
+  void playHunterTurn(() => useHounds(state, cells), { type: 'hounds', cells });
 }
 
-async function playHunterTurn(apply: () => ApplyMoveResult): Promise<void> {
+async function playHunterTurn(apply: () => ApplyMoveResult, multiplayerAction?: Record<string, unknown>): Promise<void> {
   if (busy) {
     return;
   }
   busy = true;
   cancelPlacement();
+  if (multiplayerSessionId) {
+    render();
+    if (multiplayerAction) await sendMultiplayerAction(multiplayerAction);
+    busy = false;
+    render();
+    return;
+  }
   const applied = apply();
   if (!applied.ok) {
     busy = false;
@@ -623,7 +638,7 @@ debugToggle.addEventListener('change', () => {
 });
 
 rumoursBtn.addEventListener('click', () => {
-  void playHunterTurn(() => useRumours(state));
+  void playHunterTurn(() => useRumours(state), { type: 'rumours' });
 });
 
 houndsBtn.addEventListener('click', () => {
@@ -689,7 +704,7 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   const delta = KEY_DELTA[event.key];
-  if (!delta || busy || state.phase !== 'hunter' || patrolMode || houndsMode || trapMode) {
+  if (!delta || playerRole !== 'hunter' || busy || state.phase !== 'hunter' || patrolMode || houndsMode || trapMode) {
     return;
   }
   const step = event.shiftKey ? 2 : 1;
@@ -699,6 +714,7 @@ window.addEventListener('keydown', (event) => {
       x: state.hunter.x + delta.x * step,
       y: state.hunter.y + delta.y * step,
     }),
+    { type: 'move', to: { x: state.hunter.x + delta.x * step, y: state.hunter.y + delta.y * step } },
   );
 });
 
@@ -814,14 +830,67 @@ async function loadMultiplayerSession(): Promise<void> {
     const response = await fetch(`${botApiUrl}/api/sessions/${encodeURIComponent(sessionId!)}`, {
       headers: { 'x-telegram-init-data': telegram.initData },
     });
-    const session = await response.json() as { status?: string; yourRole?: 'hunter' | 'witch' | null };
+    const session = await response.json() as { status?: string; yourRole?: 'hunter' | 'witch' | null; state?: GameState | null };
     if (!response.ok) throw new Error('This Telegram account is not a member of that session.');
     if (!session.yourRole) throw new Error('Choose an available role in the Telegram lobby first.');
+    if (session.status !== 'ready' || !session.state) throw new Error('Waiting for both players to choose their roles in the Telegram lobby.');
     playerRole = session.yourRole;
-    sessionGate.textContent = `Your role is ${playerRole}. The bot lobby is connected, but synchronized multiplayer turns are not available yet.`;
-    // Do not fall back to the solo hunter UI on a multiplayer URL. The current
-    // service manages lobby roles; synchronized match turns are not available yet.
+    multiplayerSessionId = sessionId;
+    multiplayerInitData = telegram.initData;
+    state = session.state;
+    state.debug = false;
+    debugToggle.disabled = true;
+    document.querySelector<HTMLElement>('.settings-panel')!.hidden = true;
+    document.querySelector<HTMLButtonElement>('#overlay-restart')!.hidden = true;
+    sessionGate.hidden = true;
+    render();
+    window.setInterval(() => { void refreshMultiplayerState(); }, 1000);
   } catch (error) {
     sessionGate.textContent = error instanceof Error ? error.message : 'Could not load this multiplayer session.';
+  }
+}
+
+async function refreshMultiplayerState(): Promise<void> {
+  if (!multiplayerSessionId || !botApiUrl) return;
+  try {
+    const response = await fetch(`${botApiUrl}/api/sessions/${encodeURIComponent(multiplayerSessionId)}`, {
+      headers: { 'x-telegram-init-data': multiplayerInitData },
+    });
+    if (response.status === 410) {
+      multiplayerSessionId = null;
+      sessionGate.textContent = 'This game session has been closed.';
+      sessionGate.hidden = false;
+      return;
+    }
+    if (!response.ok) throw new Error('Could not refresh the game.');
+    const session = await response.json() as { state?: GameState | null };
+    if (session.state && JSON.stringify(session.state) !== JSON.stringify(state)) {
+      state = session.state;
+      render();
+    }
+  } catch (error) {
+    hintEl.textContent = error instanceof Error ? error.message : 'Connection to the game was lost.';
+  }
+}
+
+async function sendMultiplayerAction(action: Record<string, unknown>): Promise<void> {
+  if (!multiplayerSessionId || !botApiUrl) return;
+  busy = true;
+  render();
+  try {
+    const response = await fetch(`${botApiUrl}/api/sessions/${encodeURIComponent(multiplayerSessionId)}/action`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': multiplayerInitData },
+      body: JSON.stringify(action),
+    });
+    const result = await response.json() as { error?: string; state?: GameState };
+    if (result.state) state = result.state;
+    if (!response.ok) hintEl.textContent = result.error || 'That move could not be applied.';
+    render();
+  } catch {
+    hintEl.textContent = 'Could not send your move. Check your connection and try again.';
+  } finally {
+    busy = false;
+    render();
   }
 }
