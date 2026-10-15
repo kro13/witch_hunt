@@ -12,6 +12,12 @@ if (!token || !publicUrl || !miniAppUrl) throw new Error('Set TELEGRAM_BOT_TOKEN
 const telegramApi = `https://api.telegram.org/bot${token}`;
 let data = { sessions: {} };
 try { data = JSON.parse(await readFile(dbPath, 'utf8')); } catch { /* first run */ }
+if (!data.sessions) data.sessions = {};
+if (!data.latestSessionId) {
+  data.latestSessionId = Object.values(data.sessions)
+    .filter((session) => session.status === 'waiting' || session.status === 'ready')
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id || null;
+}
 let offset = 0;
 
 async function persist() {
@@ -28,6 +34,7 @@ const nameOf = (user) => [user.first_name, user.last_name].filter(Boolean).join(
 function inviteUrl(id) { return `https://t.me/${process.env.TELEGRAM_BOT_USERNAME}?start=join_${id}`; }
 function webUrl(id) { const url = new URL(miniAppUrl); url.searchParams.set('session', id); return url.toString(); }
 function roleKeyboard(session) {
+  if (session.status === 'closed') return { inline_keyboard: [] };
   const hunter = session.roles.hunter;
   const witch = session.roles.witch;
   return { inline_keyboard: [[
@@ -36,6 +43,15 @@ function roleKeyboard(session) {
   ], ...(session.players.length === 2 && hunter && witch ? [[{ text: 'Open game', web_app: { url: webUrl(session.id) } }]] : [])] };
 }
 async function postLobby(session, chatId, messageId) {
+  if (session.status === 'closed') {
+    const text = `Witch Hunt · Session closed${session.closeReason === 'replaced' ? ' because a new session was opened' : ''}.`;
+    if (messageId) await tg('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: { inline_keyboard: [] } });
+    else {
+      const sent = await tg('sendMessage', { chat_id: chatId, text });
+      session.messages.push({ chatId, messageId: sent.message_id });
+    }
+    return;
+  }
   const players = session.players.map((p) => `${p.name}${session.roles.hunter?.id === p.id ? ' — Hunter' : session.roles.witch?.id === p.id ? ' — Witch' : ' — choosing a role'}`).join('\n');
   const text = `Witch Hunt · ${session.status === 'ready' ? 'Ready to play' : 'Waiting for players'}\n\n${players || 'Waiting for players…'}\n\nInvite a friend: ${inviteUrl(session.id)}`;
   if (messageId) await tg('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: roleKeyboard(session), disable_web_page_preview: true });
@@ -45,23 +61,39 @@ async function postLobby(session, chatId, messageId) {
   }
 }
 async function refreshLobbies(session) {
+  if (session.status === 'closed') return;
   session.status = session.players.length === 2 && session.roles.hunter && session.roles.witch ? 'ready' : 'waiting';
   await persist();
   for (const message of [...session.messages]) {
     try { await postLobby(session, message.chatId, message.messageId); } catch { /* a deleted lobby message is harmless */ }
   }
 }
+async function closeSession(session, reason = 'stopped') {
+  if (!session || session.status === 'closed') return false;
+  session.status = 'closed';
+  session.closeReason = reason;
+  session.closedAt = new Date().toISOString();
+  if (data.latestSessionId === session.id) data.latestSessionId = null;
+  await persist();
+  for (const message of [...session.messages]) {
+    try { await postLobby(session, message.chatId, message.messageId); } catch { /* closed sessions remain closed if a lobby message is gone */ }
+  }
+  return true;
+}
 async function createSession(user, chatId) {
+  const previous = data.sessions[data.latestSessionId];
+  if (previous && previous.status !== 'closed') await closeSession(previous, 'replaced');
   const id = randomBytes(5).toString('hex');
-  const session = { id, status: 'waiting', players: [{ id: String(user.id), name: nameOf(user) }], roles: { hunter: null, witch: null }, messages: [], createdAt: new Date().toISOString() };
+  const session = { id, creatorId: String(user.id), status: 'waiting', players: [{ id: String(user.id), name: nameOf(user) }], roles: { hunter: null, witch: null }, messages: [], createdAt: new Date().toISOString() };
   data.sessions[id] = session;
+  data.latestSessionId = id;
   await persist();
   await postLobby(session, chatId);
   await tg('sendMessage', { chat_id: chatId, text: 'Share the lobby link above. You and your friend must each choose a different role.' });
 }
 async function joinSession(id, user, chatId) {
   const session = data.sessions[id];
-  if (!session) return tg('sendMessage', { chat_id: chatId, text: 'That invite has expired or is invalid. Create a new game with /start.' });
+  if (!session || session.status === 'closed') return tg('sendMessage', { chat_id: chatId, text: 'That session is closed. Ask for a new invite.' });
   const uid = String(user.id);
   if (!session.players.some((p) => p.id === uid)) {
     if (session.players.length >= 2) return tg('sendMessage', { chat_id: chatId, text: 'This lobby is full.' });
@@ -73,9 +105,21 @@ async function joinSession(id, user, chatId) {
 async function handleUpdate(update) {
   if (update.message) {
     const message = update.message;
-    const match = /^\/start(?:\s+([^\s]+))?/.exec(message.text || '');
-    if (!match) return;
-    const payload = match[1] || '';
+    const command = /^(\/\w+)(?:@\w+)?(?:\s+([^\s]+))?/.exec(message.text || '');
+    if (!command) return;
+    const commandName = command[1].toLowerCase();
+    const payload = command[2] || '';
+    if (commandName === '/stop') {
+      const session = data.sessions[data.latestSessionId];
+      if (!session || session.status === 'closed') return tg('sendMessage', { chat_id: message.chat.id, text: 'There is no active Witch Hunt session to stop.' });
+      const uid = String(message.from.id);
+      if (session.creatorId !== uid && !session.players.some((player) => player.id === uid)) {
+        return tg('sendMessage', { chat_id: message.chat.id, text: 'Only a player in the active session can stop it.' });
+      }
+      await closeSession(session, 'stopped');
+      return tg('sendMessage', { chat_id: message.chat.id, text: 'The active Witch Hunt session has been stopped.' });
+    }
+    if (commandName !== '/start') return;
     if (payload === 'create') return createSession(message.from, message.chat.id);
     if (payload.startsWith('join_')) return joinSession(payload.slice(5), message.from, message.chat.id);
     return tg('sendMessage', { chat_id: message.chat.id, text: 'Create a game lobby, then send its invite link to a friend.', reply_markup: { inline_keyboard: [[{ text: 'Create game', web_app: { url: miniAppUrl } }]] } });
@@ -86,7 +130,7 @@ async function handleUpdate(update) {
     const [, id, role] = (q.data || '').split(':');
     const session = data.sessions[id];
     const uid = String(q.from.id);
-    if (!session || !['hunter', 'witch'].includes(role)) return tg('answerCallbackQuery', { callback_query_id: q.id, text: 'This lobby is unavailable.' });
+    if (!session || session.status === 'closed' || !['hunter', 'witch'].includes(role)) return tg('answerCallbackQuery', { callback_query_id: q.id, text: 'This lobby is closed or unavailable.' });
     if (!session.players.some((p) => p.id === uid)) return tg('answerCallbackQuery', { callback_query_id: q.id, text: 'Join this lobby before choosing a role.' });
     const existing = session.roles.hunter?.id === uid ? 'hunter' : session.roles.witch?.id === uid ? 'witch' : null;
     if (session.roles[role] && session.roles[role].id !== uid) return tg('answerCallbackQuery', { callback_query_id: q.id, text: 'That role is already taken.' });
@@ -131,6 +175,7 @@ const server = createServer(async (req, res) => {
     const session = data.sessions[sessionMatch[1]];
     const user = validInitData(req.headers['x-telegram-init-data']);
     if (!session || !user || !session.players.some((p) => p.id === String(user.id))) return send(403, { error: 'not a session member' });
+    if (session.status === 'closed') return send(410, { error: 'session closed' });
     return send(200, { id: session.id, status: session.status, players: session.players, roles: session.roles, yourRole: session.roles.hunter?.id === String(user.id) ? 'hunter' : session.roles.witch?.id === String(user.id) ? 'witch' : null });
   }
   send(404, { error: 'not found' });

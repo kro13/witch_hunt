@@ -580,6 +580,20 @@ input[type='number'] {
 .entry-choice[hidden] { display: none; }
 .entry-choice .btn { min-width: 170px; }
 
+.session-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  background: #100d09;
+  color: var(--parchment);
+  text-align: center;
+}
+
+.session-gate[hidden] { display: none; }
+
 .btn-ghost {
   width: 100%;
   background: transparent;

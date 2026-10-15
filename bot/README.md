@@ -1,6 +1,6 @@
 # Telegram lobby service
 
-This standalone Node service handles `/start` lobby creation, invite links, membership, and mutually exclusive Hunter/Witch role claims. It uses Telegram long polling and persists lobby records to `bot/data/sessions.json`.
+This standalone Node service handles `/start` lobby creation, invite links, membership, and mutually exclusive Hunter/Witch role claims. It keeps only one active session globally: creating a new one closes the previous lobby. `/stop` closes the latest active session; its creator or either joined player can run the command. It uses Telegram long polling and persists lobby records to `bot/data/sessions.json`.
 
 ## Configure
 
@@ -19,7 +19,7 @@ This standalone Node service handles `/start` lobby creation, invite links, memb
    - `CORS_ORIGIN` — optional; set to the exact game origin in production
 
 5. Start it with `npm run bot`. Check `https://<service-host>/health` for `{"ok":true}`.
-6. Open the bot and send `/start`, then use the app's **Invite a friend** option. The bot creates a lobby and gives you a deep link to share. Both players join and choose different roles. The taken role is displayed as unavailable in the updated lobby message; the server also rejects conflicting claims.
+6. Open the bot and use the app's **Invite a friend** option. The bot creates a lobby and gives you a deep link to share. Both players join and choose different roles. The taken role is displayed as unavailable in the updated lobby message; the server also rejects conflicting claims. Use `/stop` to close the latest active lobby. Creating another lobby closes the previous one automatically.
 
 Keep `TELEGRAM_BOT_TOKEN` only in the server environment and never commit it. The read-only session endpoint verifies Telegram's signed `initData` and checks membership. Local polling and production webhook mode should not run at the same time for one bot token.
 

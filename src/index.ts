@@ -773,16 +773,14 @@ rolePicker.querySelector('#choose-witch')!.addEventListener('click', () => {
 applyShellCopy();
 buildBoard(state.config.boardSize);
 const entryChoice = document.querySelector<HTMLElement>('#entry-choice')!;
+const sessionGate = document.querySelector<HTMLElement>('#session-gate')!;
 const telegram = (window as Window & { Telegram?: { WebApp?: { initData?: string; openTelegramLink?: (url: string) => void } } }).Telegram?.WebApp;
 const botUsername = document.querySelector<HTMLMetaElement>('meta[name="telegram-bot-username"]')?.content;
+const botApiUrl = document.querySelector<HTMLMetaElement>('meta[name="telegram-bot-api-url"]')?.content?.replace(/\/$/, '');
 const sessionId = new URLSearchParams(location.search).get('session');
 entryChoice.hidden = Boolean(sessionId);
 rolePicker.hidden = true;
-if (sessionId) {
-  // A session link is only a lobby entry point. The bot server verifies identity
-  // and role claims; gameplay networking is supplied by the configured API.
-  entryChoice.hidden = true;
-}
+sessionGate.hidden = !sessionId;
 document.querySelector('#play-single')!.addEventListener('click', () => {
   entryChoice.hidden = true;
   rolePicker.hidden = false;
@@ -797,4 +795,33 @@ document.querySelector('#invite-friend')!.addEventListener('click', () => {
   if (telegram?.openTelegramLink) telegram.openTelegramLink(botUrl);
   else window.location.assign(botUrl);
 });
-render();
+if (sessionId) {
+  void loadMultiplayerSession();
+} else {
+  render();
+}
+
+async function loadMultiplayerSession(): Promise<void> {
+  if (!botApiUrl) {
+    sessionGate.textContent = 'Multiplayer is not connected: set the bot service URL in the telegram-bot-api-url meta tag.';
+    return;
+  }
+  if (!telegram?.initData) {
+    sessionGate.textContent = 'Open this session from Telegram so your player identity can be verified.';
+    return;
+  }
+  try {
+    const response = await fetch(`${botApiUrl}/api/sessions/${encodeURIComponent(sessionId!)}`, {
+      headers: { 'x-telegram-init-data': telegram.initData },
+    });
+    const session = await response.json() as { status?: string; yourRole?: 'hunter' | 'witch' | null };
+    if (!response.ok) throw new Error('This Telegram account is not a member of that session.');
+    if (!session.yourRole) throw new Error('Choose an available role in the Telegram lobby first.');
+    playerRole = session.yourRole;
+    sessionGate.textContent = `Your role is ${playerRole}. The bot lobby is connected, but synchronized multiplayer turns are not available yet.`;
+    // Do not fall back to the solo hunter UI on a multiplayer URL. The current
+    // service manages lobby roles; synchronized match turns are not available yet.
+  } catch (error) {
+    sessionGate.textContent = error instanceof Error ? error.message : 'Could not load this multiplayer session.';
+  }
+}
