@@ -775,7 +775,6 @@ buildBoard(state.config.boardSize);
 const entryChoice = document.querySelector<HTMLElement>('#entry-choice')!;
 const telegram = (window as Window & { Telegram?: { WebApp?: { initData?: string; openTelegramLink?: (url: string) => void } } }).Telegram?.WebApp;
 const botUsername = document.querySelector<HTMLMetaElement>('meta[name="telegram-bot-username"]')?.content;
-const inTelegram = Boolean(telegram?.initData);
 const sessionId = new URLSearchParams(location.search).get('session');
 entryChoice.hidden = Boolean(sessionId);
 rolePicker.hidden = true;
@@ -789,8 +788,13 @@ document.querySelector('#play-single')!.addEventListener('click', () => {
   rolePicker.hidden = false;
 });
 document.querySelector('#invite-friend')!.addEventListener('click', () => {
-  const botUrl = botUsername ? `https://t.me/${botUsername}?start=create` : '';
-  if (inTelegram && botUrl) telegram?.openTelegramLink?.(botUrl);
-  else alert('Open this game from your Telegram bot to create an invite session.');
+  const username = botUsername?.trim().replace(/^@/, '');
+  if (!username) {
+    alert('Set the bot username in the telegram-bot-username meta tag in index.html, then redeploy the game.');
+    return;
+  }
+  const botUrl = `https://t.me/${username}?start=create`;
+  if (telegram?.openTelegramLink) telegram.openTelegramLink(botUrl);
+  else window.location.assign(botUrl);
 });
 render();
